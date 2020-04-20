@@ -20,10 +20,16 @@ package functions;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import io.github.resilience4j.core.IntervalFunction;
+import io.github.resilience4j.retry.Retry;
+import io.github.resilience4j.retry.RetryConfig;
+import io.github.resilience4j.retry.RetryRegistry;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.logging.Logger;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -42,7 +48,7 @@ public class ExampleIntegrationTest {
   @BeforeClass
   public static void setUp() throws IOException {
     // Emulate the function locally by running the Functions Framework Maven plugin
-    emulatorProcess = (new ProcessBuilder()).command("sh", "-c", "mvn function:run").start();
+    emulatorProcess = (new ProcessBuilder()).command("mvn", "function:run").start();
   }
 
   @AfterClass
@@ -52,14 +58,23 @@ public class ExampleIntegrationTest {
   }
 
   @Test
-  public void helloHttp_shouldRunWithFunctionsFramework() throws IOException, InterruptedException {
+  public void helloHttp_shouldRunWithFunctionsFramework() throws Throwable {
     String functionUrl = BASE_URL + "/helloHttp";
 
     java.net.http.HttpRequest getRequest =
         java.net.http.HttpRequest.newBuilder().uri(URI.create(functionUrl)).GET().build();
 
-    HttpResponse response = client.send(getRequest, HttpResponse.BodyHandlers.ofString());
-    assertThat(response.body().toString()).isEqualTo("Hello world!");
+    RetryRegistry registry = RetryRegistry.of(RetryConfig.custom()
+        .maxAttempts(10)
+        .intervalFunction(IntervalFunction.ofExponentialBackoff(100))
+        .retryExceptions(IOException.class)
+        .build());
+    Retry retry = registry.retry("my");
+    String body = Retry.decorateCheckedFunction(retry, (HttpRequest r) -> {
+      return client.send(r, HttpResponse.BodyHandlers.ofString()).body();
+    }).apply(getRequest);
+
+    assertThat(body).isEqualTo("Hello world!");
   }
 }
 // [END functions_http_integration_test]
